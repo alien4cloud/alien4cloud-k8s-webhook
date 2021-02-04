@@ -1,0 +1,24 @@
+tosca_definitions_version: alien_dsl_3_0_0
+
+metadata:
+  template_name: org.alien4cloud.k8s.webhook
+  template_version: 3.0.0
+  template_author: alien4cloud
+
+description: |
+  Types for A4C K8S webhook
+
+imports:
+  - tosca-normative-types:1.0.0-ALIEN20
+
+policy_types:
+
+  org.alien4cloud.policies.PseudoResourcePolicy:
+    derived_from: tosca.policies.Root
+    metadata:
+      icon: /images/ghost.png
+      a4c_class: fa fa-bolt
+      a4c_svg_char: f0e7
+      # pluginId:pluginBean:phase
+      a4c_policy_impl: alien4cloud-k8s-webhook:k8s-webhook-policy-modifier:post-node-match
+

@@ -1,0 +1,111 @@
+package org.alien4cloud.plugin.k8s.webhook.controller;
+
+import static alien4cloud.utils.AlienUtils.safe;
+
+import java.util.Base64;
+
+import io.fabric8.kubernetes.api.model.ConfigMap;
+import io.fabric8.kubernetes.api.model.Pod;
+import io.fabric8.kubernetes.api.model.Secret;
+import io.fabric8.kubernetes.api.model.StatusBuilder;
+import io.fabric8.kubernetes.api.model.admission.AdmissionResponse;
+import io.fabric8.kubernetes.api.model.admission.AdmissionReview;
+import io.fabric8.kubernetes.api.model.apps.Deployment;
+import io.swagger.annotations.ApiOperation;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.MediaType;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
+
+@Slf4j
+@RestController
+@RequestMapping({ "/rest/mutate", "/rest/v1/mutate", "/rest/latest/mutate" })
+public class MutateController {
+
+    @ApiOperation(value = "Process AdmissionReview request from K8S")
+    @RequestMapping(value = "/{topoId}", method = RequestMethod.POST, produces = MediaType.APPLICATION_JSON_VALUE)
+    public AdmissionReview mutate(@PathVariable String topoId, @RequestBody AdmissionReview ar) {
+
+        log.info ("Request: name: {}, namespace: {}, object: {}", ar.getRequest().getName(),
+                        ar.getRequest().getNamespace(), ar.getRequest().getObject() == null ? "<NONE>" : ar.getRequest().getObject().toString());
+
+        AdmissionResponse resp = new AdmissionResponse();
+        resp.setUid(ar.getRequest().getUid());
+        if ((ar.getRequest().getName() != null) && ar.getRequest().getName().startsWith("nope")) {
+           resp.setAllowed(Boolean.FALSE);
+           resp.setStatus (new StatusBuilder().withCode(403).withMessage("a4c webhook forbids it.").build());
+           log.info ("Rejecting the request...");
+           ar.setResponse(resp);
+           return ar;
+        } else {
+           resp.setAllowed(Boolean.TRUE);
+        }
+
+        /* response will contain a base64 encoded array of JSONPatches */
+        if (ar.getRequest().getObject() instanceof Deployment) {
+          log.info ("Got a deployment");
+          String srcPatch = "[{\"op\": \"add\", \"path\": \"/spec/template/metadata/labels/a4c-deployment-mutated\", \"value\": \"true\"}]";
+          resp.setPatch(Base64.getEncoder().encodeToString(srcPatch.getBytes()));
+          log.info ("JSON Patch {}", srcPatch);
+          resp.setPatchType("JSONPatch");
+        } else if (ar.getRequest().getObject() instanceof Pod) {
+           Pod pod = (Pod)ar.getRequest().getObject();
+           String role = safe(pod.getMetadata().getLabels()).get("spark-role");
+           if (role != null) {
+              log.info ("Got a Spark POD with role {}", role);
+              String srcPatch = "[{\"op\": \"add\", \"path\": \"/metadata/labels/a4c-pod-mutated\", \"value\": \"true\"}]";
+              resp.setPatch(Base64.getEncoder().encodeToString(srcPatch.getBytes()));
+              log.info ("JSON Patch {}", srcPatch);
+              resp.setPatchType("JSONPatch");
+           }
+        } else if (ar.getRequest().getObject() instanceof ConfigMap) {
+           log.info ("Got a ConfigMap");
+           ConfigMap cm = (ConfigMap)ar.getRequest().getObject();
+           for (String name : safe(cm.getData()).keySet()) {
+              String content = cm.getData().get(name);
+              log.info ("File {}, content {}", name, content);
+              if (name.equals("input.properties")) {
+                 content += "\r\nAdded by A4C webhook";
+                 // remove file from data, add it to binary data, assume there is only one file and no binary data yet
+                 content = Base64.getEncoder().encodeToString(content.getBytes());
+                 String srcPatch = "[{\"op\": \"remove\", \"path\": \"/data/" + name + "\"}," +
+                                    "{\"op\": \"add\", \"path\": \"/binaryData\", \"value\": {\"" + name + "\": \"" + content + "\"}}]";
+                 resp.setPatch(Base64.getEncoder().encodeToString(srcPatch.getBytes()));
+                 resp.setPatchType("JSONPatch");
+                 log.info ("JSON Patch {}", srcPatch);
+              }
+           }
+        } else if (ar.getRequest().getObject() instanceof Secret) {
+           log.info ("Got a Secret");
+           Secret secret = (Secret)ar.getRequest().getObject();
+           String srcPatch = "[";
+           boolean start = true;
+           for (String name : safe(secret.getData()).keySet()) {
+              String content = secret.getData().get(name);
+              String decoded = new String(Base64.getDecoder().decode(content));
+              log.info ("File {}, content {}, decoded content {}", name, content, decoded);
+              // there may be several files, build patch array file by file
+              if (name.endsWith(".html") || name.endsWith(".txt")) {
+                 decoded += "\r\nAdded by A4C webhook";
+                 content = Base64.getEncoder().encodeToString(decoded.getBytes());
+                 srcPatch += (start ? "" : ",") + "{\"op\": \"replace\", \"path\": \"/data/" + name + "\", \"value\": \"" + content + "\"}";
+                 start = false;
+              }
+           }      
+           srcPatch += "]";
+           if (!srcPatch.equals("[]")) {       
+              resp.setPatch(Base64.getEncoder().encodeToString(srcPatch.getBytes()));
+              log.info ("JSON Patch {}", srcPatch);
+              resp.setPatchType("JSONPatch");
+           }
+        }
+
+        ar.setResponse(resp);
+
+        return ar;
+    }
+}
+

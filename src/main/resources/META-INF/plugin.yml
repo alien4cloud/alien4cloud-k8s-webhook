@@ -1,0 +1,11 @@
+id: alien4cloud-k8s-webhook
+name: K8S WebHook
+version: ${project.version}
+description: >
+  This plugin implements a K8S webhook
+configuration_class: org.alien4cloud.plugin.k8s.webhook.PluginConfiguration
+component_descriptors:
+  - bean_name: webhook-generator
+    name: A4C K8S webhook generator
+    description: >
+      Generates a webhook related to namespace deployed
