@@ -9,3 +9,7 @@ component_descriptors:
     name: A4C K8S webhook generator
     description: >
       Generates a webhook related to namespace deployed
+  - bean_name: pseudoresource-cleaner
+    name: Pseudo resource cleaner
+    description: >
+      Removes pseudo resources from workflows

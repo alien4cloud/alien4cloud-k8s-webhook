@@ -10,6 +10,8 @@ import org.springframework.stereotype.Component;
 @Component("k8s-webhook-policy-modifier")
 public class PolicyModifier extends TopologyModifierSupport {
 
+    public final static String PSEUDORESOURCE_POLICY = "org.alien4cloud.policies.PseudoResourcePolicy";
+
     @Override
     @ToscaContextual
     public void process(Topology topology, FlowExecutionContext context) {

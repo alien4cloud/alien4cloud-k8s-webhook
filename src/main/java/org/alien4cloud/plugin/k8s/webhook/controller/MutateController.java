@@ -205,6 +205,7 @@ public class MutateController {
 
                  /* check gangja artefacts */
                  boolean existA = (pod.getMetadata().getAnnotations() != null) || (annotations.length() > 0);
+                 boolean existL = (pod.getMetadata().getLabels() != null) || (labels.length() > 0);
                  for (Map.Entry<String, DeploymentArtifact> aa : node.getArtifacts().entrySet()) {
                     if (aa.getValue().getArtifactType().equals(GANGJA_ARTIFACT_TYPE)) {
                        DeploymentArtifact clonedArtifact = CloneUtil.clone(aa.getValue());
@@ -212,6 +213,9 @@ public class MutateController {
                        log.debug ("File {}", clonedArtifact.getArtifactPath());
                        srcPatch = addToPatch(srcPatch, processFile(clonedArtifact.getArtifactPath(), "annotation", 
                                      "/metadata/annotations", existA,
+                                     PropertyUtil.getPropertyValueFromPath(safe(node.getProperties()),"var_values")));
+                       srcPatch = addToPatch(srcPatch, processFile(clonedArtifact.getArtifactPath(), "label", 
+                                     "/metadata/labels", existL,
                                      PropertyUtil.getPropertyValueFromPath(safe(node.getProperties()),"var_values")));
                     }
                  }

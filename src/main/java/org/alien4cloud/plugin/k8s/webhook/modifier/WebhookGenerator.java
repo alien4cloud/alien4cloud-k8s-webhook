@@ -1,6 +1,5 @@
 package org.alien4cloud.plugin.k8s.webhook.modifier;
 
-import alien4cloud.paas.wf.util.WorkflowUtils;
 import alien4cloud.paas.wf.validation.WorkflowValidator;
 import alien4cloud.tosca.context.ToscaContextual;
 import static alien4cloud.utils.AlienUtils.safe;
@@ -27,6 +26,8 @@ import static org.alien4cloud.plugin.kubernetes.modifier.KubeTopologyUtils.K8S_T
 import static org.alien4cloud.plugin.kubernetes.modifier.KubeTopologyUtils.K8S_TYPES_SIMPLE_RESOURCE;
 import static alien4cloud.plugin.k8s.spark.jobs.modifier.SparkJobsModifier.K8S_TYPES_SPARK_JOBS;
 
+import static org.alien4cloud.plugin.k8s.webhook.policies.PolicyModifier.PSEUDORESOURCE_POLICY;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
@@ -45,8 +46,6 @@ import java.util.Set;
 @Slf4j
 @Component("webhook-generator")
 public class WebhookGenerator extends TopologyModifierSupport {
-
-    private final String PSEUDORESOURCE_POLICY = "org.alien4cloud.policies.PseudoResourcePolicy";
 
     @Inject
     private WebhookConfiguration conf;
@@ -144,7 +143,6 @@ public class WebhookGenerator extends TopologyModifierSupport {
                         "        matchLabels:\n" +
                         "          ns-clef-namespace: " + namespace + "\n";
 
-        /* should be conditional */
         /* create webhook configuration */
         NodeTemplate wh = addNodeTemplate(null, topology, "Webhook", K8S_TYPES_SIMPLE_RESOURCE, getK8SCsarVersion(topology));
 
