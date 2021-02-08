@@ -13,3 +13,7 @@ component_descriptors:
     name: Pseudo resource cleaner
     description: >
       Removes pseudo resources from workflows
+  - bean_name: runner-accesscontrol-generator
+    name: Runner access control generator
+    description: >
+      Generates acess control resources to allow running deployments or jobs

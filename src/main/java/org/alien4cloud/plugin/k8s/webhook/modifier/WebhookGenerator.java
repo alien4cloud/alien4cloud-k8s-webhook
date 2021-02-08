@@ -8,30 +8,21 @@ import alien4cloud.utils.PropertyUtil;
 
 import org.alien4cloud.alm.deployment.configuration.flow.FlowExecutionContext;
 import org.alien4cloud.alm.deployment.configuration.flow.TopologyModifierSupport;
-import org.alien4cloud.tosca.model.CSARDependency;
 import org.alien4cloud.tosca.model.definitions.AbstractPropertyValue;
-import org.alien4cloud.tosca.model.definitions.ComplexPropertyValue;
 import org.alien4cloud.tosca.model.definitions.ScalarPropertyValue;
 import org.alien4cloud.tosca.model.templates.NodeTemplate;
-import org.alien4cloud.tosca.model.templates.PolicyTemplate;
 import org.alien4cloud.tosca.model.templates.Topology;
 import org.alien4cloud.tosca.model.workflow.Workflow;
 import org.alien4cloud.tosca.normative.constants.NormativeRelationshipConstants;
 import org.alien4cloud.tosca.normative.constants.NormativeWorkflowNameConstants;
 import org.alien4cloud.tosca.utils.TopologyNavigationUtil;
 
-import static org.alien4cloud.plugin.kubernetes.csar.Version.K8S_CSAR_VERSION;
 import static org.alien4cloud.plugin.kubernetes.modifier.KubernetesAdapterModifier.K8S_TYPES_KUBE_CLUSTER;
-import static org.alien4cloud.plugin.kubernetes.modifier.KubernetesAdapterModifier.NAMESPACE_RESOURCE_NAME;
 import static org.alien4cloud.plugin.kubernetes.modifier.KubeTopologyUtils.K8S_TYPES_DEPLOYMENT_RESOURCE;
 import static org.alien4cloud.plugin.kubernetes.modifier.KubeTopologyUtils.K8S_TYPES_SIMPLE_RESOURCE;
 import static alien4cloud.plugin.k8s.spark.jobs.modifier.SparkJobsModifier.K8S_TYPES_SPARK_JOBS;
 
-import static org.alien4cloud.plugin.k8s.webhook.policies.PolicyModifier.PSEUDORESOURCE_POLICY;
-
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import org.apache.commons.lang.StringUtils;
@@ -74,43 +65,16 @@ public class WebhookGenerator extends TopologyModifierSupport {
 
     private void doProcess(Topology topology, FlowExecutionContext context) {
         /* get namespace */
-        String namespace = null;
-        NodeTemplate kubeNS = topology.getNodeTemplates().get((String)context.getExecutionCache().get(NAMESPACE_RESOURCE_NAME));
-        if (kubeNS != null) {
-           try {
-              ObjectNode spec = (ObjectNode) mapper.readTree(PropertyUtil.getScalarValue(kubeNS.getProperties().get("resource_spec")));
-              namespace = spec.with("metadata").get("name").textValue();
-           } catch(Exception e) {
-              log.info("Can't find namespace name");
-           }
-        } else {
-           log.info ("No namespace resource");
-        }
+        String namespace = Utils.getNamespace (topology, context, mapper);
         if (StringUtils.isBlank(namespace)) {
            log.info ("No namespace, can not perform");
            return;
         }
 
         /* get kube config */
-        Topology init_topology = (Topology)context.getExecutionCache().get(FlowExecutionContext.INITIAL_TOPOLOGY);
-        Set<NodeTemplate> kubeClusterNodes = TopologyNavigationUtil.getNodesOfType(init_topology, K8S_TYPES_KUBE_CLUSTER, false);
-        AbstractPropertyValue configPV = null;
-        if (kubeClusterNodes != null && !kubeClusterNodes.isEmpty()) {
-            NodeTemplate kubeClusterNode = kubeClusterNodes.iterator().next();
-            configPV = PropertyUtil.getPropertyValueFromPath(kubeClusterNode.getProperties(), "config");
-        } else {
-           log.error ("Cannot find KubeCluster config");
-           return;
-        }
+        String kube_config = (String) context.getExecutionCache().get(K8S_TYPES_KUBE_CLUSTER);
 
-        /* get all PseudoResource policies targets on initial topology */
-        Set<String> pseudoResources = new HashSet<String>();
-        Set<PolicyTemplate> policies = TopologyNavigationUtil.getPoliciesOfType(init_topology, PSEUDORESOURCE_POLICY, true);
-        for (PolicyTemplate policy : policies) {
-           /* get all target nodes on current policy */
-           pseudoResources.addAll(safe(policy.getTargets()));
-        }
-        if (pseudoResources.size() == 0) {
+        if (!Utils.containsPseudoResources(context)) {
            log.info ("No pseudo  resources found");
            return;
         }
@@ -149,73 +113,21 @@ public class WebhookGenerator extends TopologyModifierSupport {
                         "          ns-clef-namespace: " + namespace + "\n";
 
         /* create webhook configuration */
-        NodeTemplate wh = addNodeTemplate(null, topology, "Webhook", K8S_TYPES_SIMPLE_RESOURCE, getK8SCsarVersion(topology));
+        NodeTemplate wh = addNodeTemplate(null, topology, "Webhook", K8S_TYPES_SIMPLE_RESOURCE, Utils.getK8SCsarVersion(topology));
 
         setNodePropertyPathValue(null,topology,wh,"resource_type", new ScalarPropertyValue("mutatingwebhookconfiguration"));
         setNodePropertyPathValue(null,topology,wh,"resource_id", new ScalarPropertyValue("wh-" + namespace));
         setNodePropertyPathValue(null,topology,wh,"resource_spec", new ScalarPropertyValue(whconf));
 
-        setNodePropertyPathValue(null, topology, wh, "kube_config", configPV);
+        setNodePropertyPathValue(null, topology, wh, "kube_config", new ScalarPropertyValue(kube_config));
 
         Set<NodeTemplate> deployNodes = TopologyNavigationUtil.getNodesOfType(topology, K8S_TYPES_DEPLOYMENT_RESOURCE, false);
         Set<NodeTemplate> jobNodes = TopologyNavigationUtil.getNodesOfType(topology, K8S_TYPES_SPARK_JOBS, true);
         for (NodeTemplate deployNode: deployNodes) {
             addRelationshipTemplate(null,topology,wh,deployNode.getName(),NormativeRelationshipConstants.DEPENDS_ON,"dependency", "feature");
-            addEnvToDeploy (deployNode, topology, context.getEnvironmentContext().get().getEnvironment().getId());
         }
         for (NodeTemplate jobNode: jobNodes) {
             addRelationshipTemplate(null,topology,wh,jobNode.getName(),NormativeRelationshipConstants.DEPENDS_ON,"dependency", "feature");
-            addEnvToJob (jobNode, topology, context.getEnvironmentContext().get().getEnvironment().getId());
         }
-    }
-
-    private void addEnvToDeploy (NodeTemplate node, Topology topology, String envId) {
-       /* get resource spec */
-       JsonNode spec = null;
-       try {
-          spec = mapper.readTree(PropertyUtil.getScalarValue(node.getProperties().get("resource_spec")));
-       } catch(Exception e) {
-          log.error("Can't get node {} spec: {}", node.getName(), e.getMessage());
-          return;
-       }
-       /* get container */
-       ObjectNode container = (ObjectNode)spec.with("spec").with("template").with("spec").withArray("containers").elements().next();
-       /* create new env var object */
-       ObjectNode newEnv = JsonNodeFactory.instance.objectNode();
-       newEnv.put ("name", "ENVIRONMENT_ID");
-       newEnv.put ("value", envId);
-       /* add new env var to container */
-       if (!container.has("env")) {
-          container.putArray("env");
-       }
-       container.withArray("env").add(newEnv);
-       /* replace container in spec */
-       String specStr = null;
-       try {
-          specStr = mapper.writeValueAsString(spec);
-       } catch(Exception e) {
-          log.error("Can't rewrite node {} spec: {}", node.getName(), e.getMessage());
-          return;
-       }
-       setNodePropertyPathValue(null, topology, node, "resource_spec", new ScalarPropertyValue(specStr));
-    }
-
-    private void addEnvToJob (NodeTemplate node, Topology topology, String envId) {
-       ComplexPropertyValue envsPV = (ComplexPropertyValue)PropertyUtil.getPropertyValueFromPath(node.getProperties(), "environments");
-       Map<String,Object> envs = new HashMap<String,Object>();
-       if (envsPV != null) {
-          envs = envsPV.getValue();
-       }
-       envs.put ("ENVIRONMENT_ID", new ScalarPropertyValue(envId));
-       setNodePropertyPathValue(null, topology, node, "environments", new ComplexPropertyValue(envs));
-    }
-
-    private String getK8SCsarVersion(Topology topology) {
-        for (CSARDependency dep : topology.getDependencies()) {
-            if (dep.getName().equals("org.alien4cloud.kubernetes.api")) {
-                return dep.getVersion();
-            }
-        }
-        return K8S_CSAR_VERSION;
     }
 }
