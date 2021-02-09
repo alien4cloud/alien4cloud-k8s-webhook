@@ -352,7 +352,7 @@ public class MutateController {
                  }
                  result = addToPatch (result, new StringBuffer("{\"op\": \"replace\", \"path\": \"" + path + "/" + idx + "/value\", \"value\": \"" + sval + "\"}"));
               } else {
-                 log.warn ("Can not find env var {} in node", envs.get(idx).getName());
+                 log.debug ("Can not find env var {} in node", envs.get(idx).getName());
               }
            }
         }
@@ -475,7 +475,7 @@ public class MutateController {
               log.debug ("env[{}] {} => {}", idx, name, value);
               result = addToPatch (result, new StringBuffer("{\"op\": \"replace\", \"path\": \"" + path + "/" + idx + "/value\", \"value\": \"" + value + "\"}"));
            } else {
-              log.warn ("Can not find env var {} in node", name);
+              log.debug ("Can not find env var {} in node", name);
            }
         }
         return result;
