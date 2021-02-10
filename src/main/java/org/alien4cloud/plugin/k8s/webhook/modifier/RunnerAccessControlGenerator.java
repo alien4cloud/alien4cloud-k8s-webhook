@@ -75,6 +75,8 @@ public class RunnerAccessControlGenerator extends TopologyModifierSupport {
                       "apiVersion: rbac.authorization.k8s.io/v1\n" +
                       "metadata:\n" +
                       "  name: " + envId + "\n" +
+                      "  labels:\n" +
+                      "    a4c_id: " + envId + "\n" +
                       "rules:\n" +
                       "  - apiGroups: [\"\"]\n" +
                       "    resources: [\"pods\"]\n" +
@@ -92,18 +94,22 @@ public class RunnerAccessControlGenerator extends TopologyModifierSupport {
                       "  - apiGroups: [\"\"] # \"\" indicates the core API group\n" +
                       "    resources: [\"configmaps\"]\n" +
                       "    verbs: [\"get\", \"watch\", \"list\", \"create\", \"update\"]\n";
-        createResource (topology, "RunnerRole", "role" + envId, "role", role, namespace, kube_config, deployNodes, nsNodeName);
+        createResource (topology, "RunnerRole", envId, "role", role, namespace, kube_config, deployNodes, nsNodeName);
 
         String serviceaccount = "apiVersion: v1\n" +
                                 "kind: ServiceAccount\n" +
                                 "metadata:\n" +
-                                "  name: " + envId;
+                                "  name: " + envId + "\n" +
+                                "  labels:\n" +
+                                "    a4c_id: " + envId + "\n";
         createResource (topology, "RunnerSA", envId, "serviceaccount", serviceaccount, namespace, kube_config, deployNodes, nsNodeName);
 
         String rolebinding = "kind: RoleBinding\n" +
                              "apiVersion: rbac.authorization.k8s.io/v1\n" +
                              "metadata:\n" +
                              "  name: " + envId + "\n" +
+                             "  labels:\n" +
+                             "    a4c_id: " + envId + "\n" +
                              "roleRef:\n" +
                              "  apiGroup: rbac.authorization.k8s.io\n" +
                              "  kind: Role\n" +
