@@ -89,7 +89,7 @@ public class WebhookGenerator extends TopologyModifierSupport {
         }
 
         /* generate webhook definition */
-        String whconf = "apiVersion: admissionregistration.k8s.io/v1\n" +
+        String whconf = "apiVersion: admissionregistration.k8s.io/v1beta1\n" +
                         "kind: MutatingWebhookConfiguration\n" +
                         "metadata:\n" +
                         "  name: wh-" + namespace + "\n" +
