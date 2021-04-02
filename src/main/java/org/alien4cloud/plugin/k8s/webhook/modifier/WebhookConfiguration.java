@@ -7,6 +7,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.stereotype.Component;
 
+import java.util.Map;
+
 @Getter
 @Setter
 @Component
@@ -17,4 +19,5 @@ public class WebhookConfiguration {
     private String caFile;
     private String a4cUrl;
     private boolean removeResources = true;
+    private Map<String,String> prioritesk8s;
 }

@@ -132,8 +132,16 @@ public class MutateController {
               log.debug("{}:{}", BAS_PROP, sBas);
            }
         }
-        boolean bas = Boolean.valueOf(sBas) && conf.isRemoveResources();
+        boolean bas = Boolean.valueOf(sBas);
+        String prio = conf.getPrioritesk8s().get("production");
+        if (bas) {
+           prio = conf.getPrioritesk8s().get("bacasable");
+        }
+        if (prio == null) {
+           log.warn("Priority not set in configuration");
+        }
         log.debug ("conf isRemoveResources: {}", conf.isRemoveResources());
+        bas = bas && conf.isRemoveResources();
 
         if (ar.getRequest().getObject() instanceof Deployment) {
            log.info ("Request for a deployment {}", ar.getRequest().getName());
@@ -211,6 +219,10 @@ public class MutateController {
                  }
               }
 
+              /* set priority class */
+              if (prio != null) {
+                 srcPatch = addToPatch (srcPatch, new StringBuffer("{\"op\": \"add\", \"path\": \"/spec/template/spec/priorityClassName\", \"value\":\"" + prio + "\"}"));
+              }
            }
         } else if (ar.getRequest().getObject() instanceof Pod) {
            String podName = ar.getRequest().getName();
@@ -268,6 +280,14 @@ public class MutateController {
                  if (bas) {
                     srcPatch = addToPatch (srcPatch, new StringBuffer("{ \"op\": \"remove\", \"path\": \"/spec/containers/0/resources/limits\" }"));
                     srcPatch = addToPatch (srcPatch, new StringBuffer("{ \"op\": \"remove\", \"path\": \"/spec/containers/0/resources/requests\" }"));
+                 }
+
+                 /* set priority class */
+                 if (prio != null) {
+                    if (pod.getSpec().getPriority() != null) {
+                       srcPatch = addToPatch (srcPatch, new StringBuffer("{\"op\": \"remove\", \"path\": \"/spec/priority\"}"));
+                    }
+                    srcPatch = addToPatch (srcPatch, new StringBuffer("{\"op\": \"add\", \"path\": \"/spec/priorityClassName\", \"value\":\"" + prio + "\"}"));
                  }
               }
            }
