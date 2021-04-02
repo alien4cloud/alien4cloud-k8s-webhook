@@ -1,10 +1,14 @@
 package org.alien4cloud.plugin.k8s.webhook.controller;
 
+import alien4cloud.common.MetaPropertiesService;
 import alien4cloud.deployment.ArtifactProcessorService;
 import alien4cloud.deployment.DeploymentService;
 import alien4cloud.deployment.DeploymentRuntimeStateService;
 import alien4cloud.exception.NotFoundException;
+import alien4cloud.model.common.MetaPropertyTarget;
 import alien4cloud.model.deployment.DeploymentTopology;
+import alien4cloud.model.orchestrators.locations.Location;
+import alien4cloud.orchestrators.locations.services.LocationService;
 import alien4cloud.tosca.context.ToscaContext;
 import static alien4cloud.utils.AlienUtils.safe;
 import alien4cloud.utils.CloneUtil;
@@ -24,6 +28,8 @@ import static alien4cloud.plugin.k8s.spark.jobs.modifier.SparkJobsModifier.K8S_T
 import static org.alien4cloud.plugin.kubernetes.modifier.KubernetesAdapterModifier.A4C_KUBERNETES_ADAPTER_MODIFIER_TAG_REPLACEMENT_NODE_FOR;
 import static org.alien4cloud.plugin.kubernetes.modifier.KubeTopologyUtils.K8S_TYPES_DEPLOYMENT_RESOURCE;
 
+import org.alien4cloud.plugin.k8s.webhook.modifier.WebhookConfiguration;
+
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
@@ -40,6 +46,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.fabric8.kubernetes.api.model.EnvVar;
 import io.fabric8.kubernetes.api.model.Pod;
+import io.fabric8.kubernetes.api.model.ResourceRequirements;
 import io.fabric8.kubernetes.api.model.StatusBuilder;
 import io.fabric8.kubernetes.api.model.admission.AdmissionResponse;
 import io.fabric8.kubernetes.api.model.admission.AdmissionReview;
@@ -59,15 +66,22 @@ import org.springframework.web.bind.annotation.RequestMethod;
 public class MutateController {
 
     @Inject
+    private ArtifactProcessorService artifactProcessorService;
+    @Inject
     private DeploymentRuntimeStateService deploymentRuntimeStateService;
     @Inject
     private DeploymentService deploymentService;
+    @Inject
+    private LocationService locationService;
+    @Inject
+    private MetaPropertiesService metaPropertiesService;
 
     @Inject
-    private ArtifactProcessorService artifactProcessorService;
+    private WebhookConfiguration conf;
 
     private final ObjectMapper mapper = new ObjectMapper();
 
+    private static final String BAS_PROP = "Bac à sable";
     @ApiOperation(value = "Process AdmissionReview request from K8S")
     @RequestMapping(value = "/{envId}", method = RequestMethod.POST, produces = MediaType.APPLICATION_JSON_VALUE)
     public AdmissionReview mutate(@PathVariable String envId, @RequestBody AdmissionReview ar) {
@@ -94,13 +108,32 @@ public class MutateController {
            log.error ("Topology not found for env id {}", envId);
            return reject(ar, "Toplogy not found");
         }
-        Topology init_topology = null;
+
+        alien4cloud.model.deployment.Deployment deployment = null;
         try {
-           init_topology = deploymentRuntimeStateService.getUnprocessedTopology(deploymentService.getActiveDeploymentOrFail(envId).getId());
+           deployment = deploymentService.getActiveDeploymentOrFail(envId);
         } catch (NotFoundException e) {
            log.error ("Active deployment not found for env id {}", envId);
            return reject(ar, "Active deployment not found");
         }
+        Topology init_topology = deploymentRuntimeStateService.getUnprocessedTopology(deployment.getId());
+
+        Location location = locationService.getOrFail(deployment.getLocationIds()[0]);
+        String basMetaPropertyKey = this.metaPropertiesService.getMetapropertykeyByName(BAS_PROP, MetaPropertyTarget.LOCATION);
+        String sBas = "false";
+        if (basMetaPropertyKey == null) {
+            log.warn("{} metaproperty does not exist", BAS_PROP);
+        } else {
+           sBas = safe(location.getMetaProperties()).get(basMetaPropertyKey);
+           if (sBas == null) {
+              log.info("{} metaproperty not set on location, using false", BAS_PROP);
+              sBas = "false";
+           } else {
+              log.debug("{}:{}", BAS_PROP, sBas);
+           }
+        }
+        boolean bas = Boolean.valueOf(sBas) && conf.isRemoveResources();
+        log.debug ("conf isRemoveResources: {}", conf.isRemoveResources());
 
         if (ar.getRequest().getObject() instanceof Deployment) {
            log.info ("Request for a deployment {}", ar.getRequest().getName());
@@ -167,6 +200,17 @@ public class MutateController {
               StringBuffer envmods = processEnvFromJson (srcEnvs, "/spec/template/spec/containers/0/env", envs);
               srcPatch = addToPatch (srcPatch, envmods);
 
+              /* remove resources if any */
+              if (bas) {
+                 ResourceRequirements resources = dep.getSpec().getTemplate().getSpec().getContainers().get(0).getResources();
+                 if ((resources != null) && (resources.getLimits() != null)) {
+                    srcPatch = addToPatch (srcPatch, new StringBuffer("{ \"op\": \"remove\", \"path\": \"/spec/template/spec/containers/0/resources/limits\" }"));
+                 }
+                 if ((resources != null) && (resources.getRequests() != null)) {
+                    srcPatch = addToPatch (srcPatch, new StringBuffer("{ \"op\": \"remove\", \"path\": \"/spec/template/spec/containers/0/resources/requests\" }"));
+                 }
+              }
+
            }
         } else if (ar.getRequest().getObject() instanceof Pod) {
            String podName = ar.getRequest().getName();
@@ -209,7 +253,7 @@ public class MutateController {
                  for (Map.Entry<String, DeploymentArtifact> aa : node.getArtifacts().entrySet()) {
                     if (aa.getValue().getArtifactType().equals(GANGJA_ARTIFACT_TYPE)) {
                        DeploymentArtifact clonedArtifact = CloneUtil.clone(aa.getValue());
-                       artifactProcessorService.processDeploymentArtifact(clonedArtifact, topology.getId());
+                       artifactProcessorService.processDeploymentArtifact(clonedArtifact, init_topology.getId());
                        log.debug ("File {}", clonedArtifact.getArtifactPath());
                        srcPatch = addToPatch(srcPatch, processFile(clonedArtifact.getArtifactPath(), "annotation", 
                                      "/metadata/annotations", existA,
@@ -218,6 +262,12 @@ public class MutateController {
                                      "/metadata/labels", existL,
                                      PropertyUtil.getPropertyValueFromPath(safe(node.getProperties()),"var_values")));
                     }
+                 }
+
+                 /* remove resources */
+                 if (bas) {
+                    srcPatch = addToPatch (srcPatch, new StringBuffer("{ \"op\": \"remove\", \"path\": \"/spec/containers/0/resources/limits\" }"));
+                    srcPatch = addToPatch (srcPatch, new StringBuffer("{ \"op\": \"remove\", \"path\": \"/spec/containers/0/resources/requests\" }"));
                  }
               }
            }

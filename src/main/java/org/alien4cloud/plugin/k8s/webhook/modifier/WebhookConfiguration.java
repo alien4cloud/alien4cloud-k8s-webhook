@@ -16,4 +16,5 @@ public class WebhookConfiguration {
 
     private String caFile;
     private String a4cUrl;
+    private boolean removeResources = true;
 }

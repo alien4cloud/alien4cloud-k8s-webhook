@@ -9,6 +9,7 @@ import alien4cloud.utils.PropertyUtil;
 import org.alien4cloud.alm.deployment.configuration.flow.FlowExecutionContext;
 import org.alien4cloud.alm.deployment.configuration.flow.TopologyModifierSupport;
 import org.alien4cloud.tosca.model.definitions.AbstractPropertyValue;
+import org.alien4cloud.tosca.model.definitions.ComplexPropertyValue;
 import org.alien4cloud.tosca.model.definitions.ScalarPropertyValue;
 import org.alien4cloud.tosca.model.templates.NodeTemplate;
 import org.alien4cloud.tosca.model.templates.Topology;
@@ -17,6 +18,7 @@ import org.alien4cloud.tosca.normative.constants.NormativeRelationshipConstants;
 import org.alien4cloud.tosca.normative.constants.NormativeWorkflowNameConstants;
 import org.alien4cloud.tosca.utils.TopologyNavigationUtil;
 
+import static org.alien4cloud.plugin.kubernetes.modifier.KubernetesAdapterModifier.A4C_KUBERNETES_ADAPTER_MODIFIER_TAG_REPLACEMENT_NODE_FOR;
 import static org.alien4cloud.plugin.kubernetes.modifier.KubernetesAdapterModifier.K8S_TYPES_KUBE_CLUSTER;
 import static org.alien4cloud.plugin.kubernetes.modifier.KubeTopologyUtils.K8S_TYPES_DEPLOYMENT_RESOURCE;
 import static org.alien4cloud.plugin.kubernetes.modifier.KubeTopologyUtils.K8S_TYPES_SIMPLE_RESOURCE;
@@ -74,8 +76,11 @@ public class WebhookGenerator extends TopologyModifierSupport {
         /* get kube config */
         String kube_config = (String) context.getExecutionCache().get(K8S_TYPES_KUBE_CLUSTER);
 
-        if (!Utils.containsPseudoResources(context)) {
-           log.info ("No pseudo  resources found");
+        Set<NodeTemplate> jobNodes = TopologyNavigationUtil.getNodesOfType(topology, K8S_TYPES_SPARK_JOBS, true);
+        Set<NodeTemplate> deployNodes = TopologyNavigationUtil.getNodesOfType(topology, K8S_TYPES_DEPLOYMENT_RESOURCE, false);
+
+        if (jobNodes.isEmpty() && deployNodes.isEmpty()) {
+           log.info ("No jobs and no deployments found");
            return;
         }
 
@@ -121,13 +126,37 @@ public class WebhookGenerator extends TopologyModifierSupport {
 
         setNodePropertyPathValue(null, topology, wh, "kube_config", new ScalarPropertyValue(kube_config));
 
-        Set<NodeTemplate> deployNodes = TopologyNavigationUtil.getNodesOfType(topology, K8S_TYPES_DEPLOYMENT_RESOURCE, false);
-        Set<NodeTemplate> jobNodes = TopologyNavigationUtil.getNodesOfType(topology, K8S_TYPES_SPARK_JOBS, true);
+        /* add label a4c_nodeid with original deployment node name in all deployment resources nodes */
+        /* add relationship to webhook (webhook must check deployments and pods) */
         for (NodeTemplate deployNode: deployNodes) {
-            addRelationshipTemplate(null,topology,wh,deployNode.getName(),NormativeRelationshipConstants.DEPENDS_ON,"dependency", "feature");
+            addRelationshipTemplate(null,topology,deployNode, "Webhook", NormativeRelationshipConstants.DEPENDS_ON,"dependency", "feature");
+            ObjectNode spec = null;
+            try {
+               spec = (ObjectNode)mapper.readTree(PropertyUtil.getScalarValue(deployNode.getProperties().get("resource_spec")));
+               spec.with("spec").with("template").with("metadata").with("labels").put("a4c_nodeid",
+                                  TopologyModifierSupport.getNodeTagValueOrNull(deployNode, A4C_KUBERNETES_ADAPTER_MODIFIER_TAG_REPLACEMENT_NODE_FOR));
+            } catch(Exception e) {
+               log.error("Can't read node {} spec: {}", deployNode.getName(), e.getMessage());
+               continue;
+            }
+            try {
+               String specStr = mapper.writeValueAsString(spec);
+               setNodePropertyPathValue(null, topology, deployNode, "resource_spec", new ScalarPropertyValue(specStr));
+            } catch(Exception e) {
+               log.error("Can't rewrite node {} spec: {}", deployNode.getName(), e.getMessage());
+            }
         }
+
+        /* add label a4c_nodeid with node name in all job nodes */
         for (NodeTemplate jobNode: jobNodes) {
-            addRelationshipTemplate(null,topology,wh,jobNode.getName(),NormativeRelationshipConstants.DEPENDS_ON,"dependency", "feature");
+           AbstractPropertyValue labelsProp = PropertyUtil.getPropertyValueFromPath(safe(jobNode.getProperties()),"labels");
+           Map<String,Object> labels = new HashMap<String,Object>();
+           if ((labelsProp != null) && labelsProp instanceof ComplexPropertyValue) {
+             ComplexPropertyValue labelsPV = (ComplexPropertyValue)labelsProp;
+             labels = safe(labelsPV.getValue());
+           }
+           labels.put ("a4c_nodeid", jobNode.getName());
+           jobNode.getProperties().put("labels", new ComplexPropertyValue(labels));
         }
     }
 }
