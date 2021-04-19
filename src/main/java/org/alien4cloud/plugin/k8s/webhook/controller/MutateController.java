@@ -389,6 +389,8 @@ public class MutateController {
      *  exist : true if base path already contains properties
      */
     private StringBuffer patchAdd (String path, String name, String value, boolean exist) {
+       value = escapeValue(value);
+       name = escapePath(name);
        if (!exist) {
           return new StringBuffer("{\"op\": \"add\", \"path\": \"" + path + "\", \"value\": {\"" + name + "\": \"" + value + "\"}}");
        } else {
@@ -420,7 +422,7 @@ public class MutateController {
                  } else if (val instanceof Map) {
                     sval = (String)((Map)val).get("value");
                  }
-                 result = addToPatch (result, new StringBuffer("{\"op\": \"replace\", \"path\": \"" + path + "/" + idx + "/value\", \"value\": \"" + sval + "\"}"));
+                 result = addToPatch (result, new StringBuffer("{\"op\": \"replace\", \"path\": \"" + path + "/" + idx + "/value\", \"value\": \"" + escapeValue(sval) + "\"}"));
               } else {
                  log.debug ("Can not find env var {} in node", envs.get(idx).getName());
               }
@@ -543,7 +545,7 @@ public class MutateController {
            String value = getEnvValFromJson(src, name);
            if (value != null) {
               log.debug ("env[{}] {} => {}", idx, name, value);
-              result = addToPatch (result, new StringBuffer("{\"op\": \"replace\", \"path\": \"" + path + "/" + idx + "/value\", \"value\": \"" + value + "\"}"));
+              result = addToPatch (result, new StringBuffer("{\"op\": \"replace\", \"path\": \"" + path + "/" + idx + "/value\", \"value\": \"" + escapeValue(value) + "\"}"));
            } else {
               log.debug ("Can not find env var {} in node", name);
            }
@@ -565,5 +567,19 @@ public class MutateController {
           }
        }
        return null;
+    }
+
+    /*
+     * escapes a value for k8s
+     */
+    private String escapeValue (String value) {
+       return value.replaceAll("\\\\", "\\\\\\\\");
+    }
+
+    /*
+     * escapes a value for a path in a JSONPatch
+     */
+    private String escapePath (String name) {
+       return name.replaceAll("/", "~1");
     }
 }
