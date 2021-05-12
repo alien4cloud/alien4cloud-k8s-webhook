@@ -545,7 +545,11 @@ public class MutateController {
            String value = getEnvValFromJson(src, name);
            if (value != null) {
               log.debug ("env[{}] {} => {}", idx, name, value);
-              result = addToPatch (result, new StringBuffer("{\"op\": \"replace\", \"path\": \"" + path + "/" + idx + "/value\", \"value\": \"" + escapeValue(value) + "\"}"));
+              if (!value.startsWith ("${SERVICE_IP_LOOKUP")) {
+                 result = addToPatch (result, new StringBuffer("{\"op\": \"replace\", \"path\": \"" + path + "/" + idx + "/value\", \"value\": \"" + escapeValue(value) + "\"}"));
+              } else {
+                 log.debug ("Skipping env[{}]", idx);
+              }
            } else {
               log.debug ("Can not find env var {} in node", name);
            }
