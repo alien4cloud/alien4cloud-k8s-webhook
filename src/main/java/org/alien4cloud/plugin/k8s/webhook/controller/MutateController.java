@@ -202,20 +202,24 @@ public class MutateController {
               srcPatch= addToPatch (srcPatch, annotations);
 
               /* update env vars from resource spec */
-              List<EnvVar> envs = dep.getSpec().getTemplate().getSpec().getContainers().get(0).getEnv();
-              JsonNode srcEnvs = spec.with("spec").with("template").with("spec").withArray("containers").elements().next().withArray("env");
+              int nbcont = dep.getSpec().getTemplate().getSpec().getContainers().size();
+              Iterator<JsonNode> jconts = spec.with("spec").with("template").with("spec").withArray("containers").elements();
+              for (int icont = 0 ; icont < nbcont; icont++) {
+                 List<EnvVar> envs = dep.getSpec().getTemplate().getSpec().getContainers().get(icont).getEnv();
+                 JsonNode srcEnvs = jconts.next().withArray("env");
               
-              StringBuffer envmods = processEnvFromJson (srcEnvs, "/spec/template/spec/containers/0/env", envs);
-              srcPatch = addToPatch (srcPatch, envmods);
+                 StringBuffer envmods = processEnvFromJson (srcEnvs, "/spec/template/spec/containers/" + icont + "/env", envs);
+                 srcPatch = addToPatch (srcPatch, envmods);
 
-              /* remove resources if any */
-              if (bas) {
-                 ResourceRequirements resources = dep.getSpec().getTemplate().getSpec().getContainers().get(0).getResources();
-                 if ((resources != null) && (resources.getLimits() != null)) {
-                    srcPatch = addToPatch (srcPatch, new StringBuffer("{ \"op\": \"remove\", \"path\": \"/spec/template/spec/containers/0/resources/limits\" }"));
-                 }
-                 if ((resources != null) && (resources.getRequests() != null)) {
-                    srcPatch = addToPatch (srcPatch, new StringBuffer("{ \"op\": \"remove\", \"path\": \"/spec/template/spec/containers/0/resources/requests\" }"));
+                 /* remove resources if any */
+                 if (bas) {
+                    ResourceRequirements resources = dep.getSpec().getTemplate().getSpec().getContainers().get(icont).getResources();
+                    if ((resources != null) && (resources.getLimits() != null)) {
+                       srcPatch = addToPatch (srcPatch, new StringBuffer("{ \"op\": \"remove\", \"path\": \"/spec/template/spec/containers/" + icont + "/resources/limits\" }"));
+                    }
+                    if ((resources != null) && (resources.getRequests() != null)) {
+                       srcPatch = addToPatch (srcPatch, new StringBuffer("{ \"op\": \"remove\", \"path\": \"/spec/template/spec/containers/" + icont + "/resources/requests\" }"));
+                    }
                  }
               }
 
@@ -255,9 +259,17 @@ public class MutateController {
                  srcPatch = addToPatch(srcPatch, annotations);
 
                  /* update pod env vars from node var_values */
-                 List<EnvVar> envs = pod.getSpec().getContainers().get(0).getEnv();
-                 StringBuffer envmods = processEnvFromVars (node, "var_values", "/spec/containers/0/env", envs);
-                 srcPatch = addToPatch (srcPatch, envmods);
+                 int nbcont = pod.getSpec().getContainers().size();
+                 for (int  icont = 0 ; icont < nbcont ; icont++) {
+                    List<EnvVar> envs = pod.getSpec().getContainers().get(icont).getEnv();
+                    StringBuffer envmods = processEnvFromVars (node, "var_values", "/spec/containers/" + icont + "/env", envs);
+                    srcPatch = addToPatch (srcPatch, envmods);
+                    /* remove resources */
+                    if (bas) {
+                       srcPatch = addToPatch (srcPatch, new StringBuffer("{ \"op\": \"remove\", \"path\": \"/spec/containers/" + icont + "/resources/limits\" }"));
+                       srcPatch = addToPatch (srcPatch, new StringBuffer("{ \"op\": \"remove\", \"path\": \"/spec/containers/" + icont + "/resources/requests\" }"));
+                    }
+                 }
 
                  /* check gangja artefacts */
                  boolean existA = (pod.getMetadata().getAnnotations() != null) || (annotations.length() > 0);
@@ -274,12 +286,6 @@ public class MutateController {
                                      "/metadata/labels", existL,
                                      PropertyUtil.getPropertyValueFromPath(safe(node.getProperties()),"var_values")));
                     }
-                 }
-
-                 /* remove resources */
-                 if (bas) {
-                    srcPatch = addToPatch (srcPatch, new StringBuffer("{ \"op\": \"remove\", \"path\": \"/spec/containers/0/resources/limits\" }"));
-                    srcPatch = addToPatch (srcPatch, new StringBuffer("{ \"op\": \"remove\", \"path\": \"/spec/containers/0/resources/requests\" }"));
                  }
 
                  /* set priority class */
