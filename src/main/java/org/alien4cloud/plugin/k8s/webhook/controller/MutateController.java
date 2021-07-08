@@ -29,10 +29,17 @@ import static org.alien4cloud.plugin.kubernetes.modifier.KubernetesAdapterModifi
 import static org.alien4cloud.plugin.kubernetes.modifier.KubeTopologyUtils.K8S_TYPES_DEPLOYMENT_RESOURCE;
 
 import org.alien4cloud.plugin.k8s.webhook.modifier.WebhookConfiguration;
+import org.alien4cloud.plugin.k8s.webhook.model.PV;
 
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
+import java.nio.charset.Charset;
+import java.security.KeyManagementException;
+import java.security.KeyStoreException;
+import java.security.NoSuchAlgorithmException;
+import java.security.cert.CertificateException;
+import java.security.cert.X509Certificate;
 import java.util.Base64;
 import java.util.Iterator;
 import java.util.List;
@@ -41,6 +48,7 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.inject.Inject;
+import javax.net.ssl.SSLContext;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -53,12 +61,25 @@ import io.fabric8.kubernetes.api.model.admission.AdmissionReview;
 import io.fabric8.kubernetes.api.model.apps.Deployment;
 import io.swagger.annotations.ApiOperation;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
+import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.RestTemplate;
+import org.apache.http.conn.ssl.NoopHostnameVerifier;
+import org.apache.http.conn.ssl.SSLConnectionSocketFactory;
+import org.apache.http.ssl.TrustStrategy;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClients;
+
 
 @Slf4j
 @RestController
@@ -107,6 +128,18 @@ public class MutateController {
         } catch (NotFoundException e) {
            log.error ("Topology not found for env id {}", envId);
            return reject(ar, "Toplogy not found");
+        }
+
+        ToscaContext.init(topology.getDependencies());
+        Set<NodeTemplate> pvNodes = TopologyNavigationUtil.getNodesOfType(topology, conf.getPvNodeType(), true);
+        if (!pvNodes.isEmpty()) {
+           boolean ok = checkPV(pvNodes);
+           ToscaContext.destroy();
+           if (!ok) {
+              return reject (ar, "Not allowed to use PV");
+           }
+        } else {
+           ToscaContext.destroy();
         }
 
         alien4cloud.model.deployment.Deployment deployment = null;
@@ -592,4 +625,78 @@ public class MutateController {
     private String escapePath (String name) {
        return name.replaceAll("/", "~1");
     }
+
+    /* calls API to check whether use of PV in topoloy is allowed
+     *   pvs: list of PV nodes
+     */
+    private boolean checkPV(Set<NodeTemplate> pvs) {
+       String url = conf.getCheckPVURL();
+       if ((url == null) || (url.trim().equals(""))) {
+          log.info ("No CheckPV URL configured");
+          return true;
+       }
+
+       RestTemplate restTemplate = null;
+       try {
+          restTemplate = getRestTemplate();
+       } catch (Exception e) {
+          log.error ("Error creating restTemplate: {}", e.getMessage());
+          return true;
+       }
+
+       String auth = conf.getCheckPVCredentials();
+       HttpHeaders headers = new HttpHeaders();
+       byte[] encodedAuth = Base64.getEncoder().encode( 
+            auth.getBytes(Charset.forName("US-ASCII")) );
+       headers.set("Authorization", "Basic " + new String(encodedAuth));       
+
+       for (NodeTemplate pv : pvs) {
+         PV data = new PV();
+         data.setQnamePV(PropertyUtil.getScalarValue(pv.getProperties().get("qnamePV")));
+         data.setQnameModule(PropertyUtil.getScalarValue(pv.getProperties().get("qnameModule")));
+         try {
+            log.debug ("Check PV request: {}", mapper.writeValueAsString(data));
+         } catch (Exception e) {}
+         try {
+            HttpEntity<PV> request;
+            request = new HttpEntity (data, headers);
+            PV result = restTemplate.postForObject(url, request, PV.class);
+            try {
+               log.debug ("Check PV response: {}", mapper.writeValueAsString(result));
+            } catch (Exception e) {}
+            if (!result.getCode().startsWith("2")) {
+               log.error ("Use of PV {} is not allowed for module {}", data.getQnamePV(), data.getQnameModule());
+               return false;
+            }
+         } catch (HttpClientErrorException he) {
+            log.warn ("HTTP error {}", he.getStatusCode());
+         } catch (HttpServerErrorException he) {
+            log.error ("HTTP error {}", he.getStatusCode());
+         } catch (ResourceAccessException re) {
+            log.error  ("Cannot send request: {}", re.getMessage());
+         }
+       
+       }
+       return true;
+    }
+
+    /**
+     * initialise rest without checking certificate
+     **/
+    private RestTemplate getRestTemplate() throws KeyStoreException, NoSuchAlgorithmException, KeyManagementException {
+        TrustStrategy acceptingTrustStrategy = new TrustStrategy() {
+            @Override
+            public boolean isTrusted(X509Certificate[] x509Certificates, String s) throws CertificateException {
+                return true;
+            }
+        };
+        SSLContext sslContext = org.apache.http.ssl.SSLContexts.custom().loadTrustMaterial(null,acceptingTrustStrategy).build();
+        SSLConnectionSocketFactory csf = new SSLConnectionSocketFactory(sslContext, NoopHostnameVerifier.INSTANCE);
+        CloseableHttpClient httpClient = HttpClients.custom().setSSLSocketFactory(csf).build();
+        HttpComponentsClientHttpRequestFactory requestFactory = new HttpComponentsClientHttpRequestFactory();
+        requestFactory.setHttpClient(httpClient);
+        RestTemplate restTemplate = new RestTemplate(requestFactory);
+        return restTemplate;
+    }
+
 }

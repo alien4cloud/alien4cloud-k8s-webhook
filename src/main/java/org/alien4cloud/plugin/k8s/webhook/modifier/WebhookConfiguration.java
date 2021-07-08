@@ -20,4 +20,8 @@ public class WebhookConfiguration {
     private String a4cUrl;
     private boolean removeResources = true;
     private Map<String,String> prioritesk8s;
+
+    private String checkPVURL;
+    private String checkPVCredentials;
+    private String pvNodeType = "artemis.pvk8s.pub.nodes.PVK8S";
 }
