@@ -6,6 +6,7 @@ import alien4cloud.deployment.DeploymentService;
 import alien4cloud.deployment.DeploymentRuntimeStateService;
 import alien4cloud.exception.NotFoundException;
 import alien4cloud.model.common.MetaPropertyTarget;
+import alien4cloud.model.common.Tag;
 import alien4cloud.model.deployment.DeploymentTopology;
 import alien4cloud.model.orchestrators.locations.Location;
 import alien4cloud.orchestrators.locations.services.LocationService;
@@ -18,7 +19,9 @@ import org.alien4cloud.alm.deployment.configuration.flow.TopologyModifierSupport
 import org.alien4cloud.tosca.model.definitions.AbstractPropertyValue;
 import org.alien4cloud.tosca.model.definitions.ComplexPropertyValue;
 import org.alien4cloud.tosca.model.definitions.DeploymentArtifact;
+import org.alien4cloud.tosca.model.templates.Capability;
 import org.alien4cloud.tosca.model.templates.NodeTemplate;
+import org.alien4cloud.tosca.model.templates.RelationshipTemplate;
 import org.alien4cloud.tosca.model.templates.Topology;
 import org.alien4cloud.tosca.model.types.NodeType;
 import org.alien4cloud.tosca.utils.TopologyNavigationUtil;
@@ -26,6 +29,7 @@ import org.alien4cloud.tosca.utils.TopologyNavigationUtil;
 import static alien4cloud.paas.yorc.modifier.GangjaModifier.GANGJA_ARTIFACT_TYPE;
 import static alien4cloud.plugin.k8s.spark.jobs.modifier.SparkJobsModifier.K8S_TYPES_SPARK_JOBS;
 import static org.alien4cloud.plugin.kubernetes.modifier.KubernetesAdapterModifier.A4C_KUBERNETES_ADAPTER_MODIFIER_TAG_REPLACEMENT_NODE_FOR;
+import static org.alien4cloud.plugin.kubernetes.modifier.KubernetesAdapterModifier.K8S_TYPES_KUBECONTAINER;
 import static org.alien4cloud.plugin.kubernetes.modifier.KubeTopologyUtils.K8S_TYPES_DEPLOYMENT_RESOURCE;
 
 import org.alien4cloud.plugin.k8s.webhook.modifier.WebhookConfiguration;
@@ -41,6 +45,7 @@ import java.security.NoSuchAlgorithmException;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.Base64;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -130,18 +135,6 @@ public class MutateController {
            return reject(ar, "Toplogy not found");
         }
 
-        ToscaContext.init(topology.getDependencies());
-        Set<NodeTemplate> pvNodes = TopologyNavigationUtil.getNodesOfType(topology, conf.getPvNodeType(), true);
-        if (!pvNodes.isEmpty()) {
-           boolean ok = checkPV(pvNodes);
-           ToscaContext.destroy();
-           if (!ok) {
-              return reject (ar, "Not allowed to use PV");
-           }
-        } else {
-           ToscaContext.destroy();
-        }
-
         alien4cloud.model.deployment.Deployment deployment = null;
         try {
            deployment = deploymentService.getActiveDeploymentOrFail(envId);
@@ -218,6 +211,34 @@ public class MutateController {
                  log.error("Can't get node spec: {}", e.getMessage());
                  return reject (ar, "Can't read node spec property");
               }
+
+              ToscaContext.init(init_topology.getDependencies());
+              Set<NodeTemplate> containerNodes = TopologyNavigationUtil.getNodesOfType(init_topology, K8S_TYPES_KUBECONTAINER, true);
+              for (NodeTemplate containerNode : containerNodes) {
+                 log.debug ("Searching node {} for PV", containerNode.getName());
+                 if (TopologyNavigationUtil.getImmediateHostTemplate (init_topology, containerNode) == initialNode) {
+                    log.debug ("Container on current deployment...");
+
+                    String qualifiedName = null;
+                    List<Tag> tags = containerNode.getTags();
+                    for (Tag tag: safe(tags)) {
+                       if (tag.getName().equals("qualifiedName")) {
+                          qualifiedName = tag.getValue();
+                      }
+                    }
+                    if (qualifiedName == null) {
+                       log.debug ("No qualified name");
+                    }
+                    else for (String pvNode : getOptPVService (init_topology, qualifiedName, containerNode))
+                    {
+                       if (!checkPV (qualifiedName, pvNode)) {
+                          ToscaContext.destroy();
+                          return reject (ar, "Not allowed to use PV");
+                       }
+                    }
+                 }
+              }
+              ToscaContext.destroy();
 
               /* add a4c_nodeid to pods */
               boolean exist = (dep.getSpec().getTemplate().getMetadata().getLabels() != null);
@@ -626,10 +647,10 @@ public class MutateController {
        return name.replaceAll("/", "~1");
     }
 
-    /* calls API to check whether use of PV in topoloy is allowed
-     *   pvs: list of PV nodes
+    /* 
+     * calls API to check whether use of PV in topoloy is allowed
      */
-    private boolean checkPV(Set<NodeTemplate> pvs) {
+    private boolean checkPV(String module, String pv) {
        String url = conf.getCheckPVURL();
        if ((url == null) || (url.trim().equals(""))) {
           log.info ("No CheckPV URL configured");
@@ -650,33 +671,31 @@ public class MutateController {
             auth.getBytes(Charset.forName("US-ASCII")) );
        headers.set("Authorization", "Basic " + new String(encodedAuth));       
 
-       for (NodeTemplate pv : pvs) {
-         PV data = new PV();
-         data.setQnamePV(PropertyUtil.getScalarValue(pv.getProperties().get("qnamePV")));
-         data.setQnameModule(PropertyUtil.getScalarValue(pv.getProperties().get("qnameModule")));
-         try {
-            log.debug ("Check PV request: {}", mapper.writeValueAsString(data));
-         } catch (Exception e) {}
-         try {
-            HttpEntity<PV> request;
-            request = new HttpEntity (data, headers);
-            PV result = restTemplate.postForObject(url, request, PV.class);
-            try {
-               log.debug ("Check PV response: {}", mapper.writeValueAsString(result));
-            } catch (Exception e) {}
-            if (!result.getCode().startsWith("2")) {
-               log.error ("Use of PV {} is not allowed for module {}", data.getQnamePV(), data.getQnameModule());
-               return false;
-            }
-         } catch (HttpClientErrorException he) {
-            log.warn ("HTTP error {}", he.getStatusCode());
-         } catch (HttpServerErrorException he) {
-            log.error ("HTTP error {}", he.getStatusCode());
-         } catch (ResourceAccessException re) {
-            log.error  ("Cannot send request: {}", re.getMessage());
-         }
-       
+       PV data = new PV();
+       data.setQnamePV(pv);
+       data.setQnameModule(module);
+       try {
+          log.debug ("Check PV request: {}", mapper.writeValueAsString(data));
+       } catch (Exception e) {}
+       try {
+          HttpEntity<PV> request;
+          request = new HttpEntity (data, headers);
+          PV result = restTemplate.postForObject(url, request, PV.class);
+          try {
+             log.debug ("Check PV response: {}", mapper.writeValueAsString(result));
+          } catch (Exception e) {}
+          if (!result.getCode().startsWith("2")) {
+             log.error ("Use of PV {} is not allowed for module {}", data.getQnamePV(), data.getQnameModule());
+             return false;
+          }
+       } catch (HttpClientErrorException he) {
+          log.warn ("HTTP error {}", he.getStatusCode());
+       } catch (HttpServerErrorException he) {
+          log.error ("HTTP error {}", he.getStatusCode());
+       } catch (ResourceAccessException re) {
+          log.error  ("Cannot send request: {}", re.getMessage());
        }
+       
        return true;
     }
 
@@ -699,4 +718,20 @@ public class MutateController {
         return restTemplate;
     }
 
+    /**
+     * get PV services related to a container if any
+     **/
+    private Set<String> getOptPVService (Topology topology, String qualifiedName, NodeTemplate containerNode) {
+       Set<String> result = new HashSet<String>();
+       for (RelationshipTemplate rel : safe(containerNode.getRelationships()).values()) {
+          log.debug ("Searching relation {}", rel.getType());
+          if (rel.getType().equals(conf.getPvRelationshipType())) {
+             NodeTemplate pv = topology.getNodeTemplates().get(rel.getTarget());
+             log.debug ("Found node {}", pv.getName());
+             Capability endpoint = safe(pv.getCapabilities()).get("pvk8s_endpoint");
+             result.add(PropertyUtil.getScalarValue(safe(endpoint.getProperties()).get("qnamePV")));
+         }
+       }
+       return result;
+    }
 }

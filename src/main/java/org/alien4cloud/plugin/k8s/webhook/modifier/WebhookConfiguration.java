@@ -23,5 +23,5 @@ public class WebhookConfiguration {
 
     private String checkPVURL;
     private String checkPVCredentials;
-    private String pvNodeType = "artemis.pvk8s.pub.nodes.PVK8S";
+    private String pvRelationshipType = "artemis.pvk8s.pub.relationships.ConnectsToPVK8S";
 }
