@@ -21,6 +21,7 @@ import org.alien4cloud.tosca.model.definitions.ComplexPropertyValue;
 import org.alien4cloud.tosca.model.definitions.DeploymentArtifact;
 import org.alien4cloud.tosca.model.templates.Capability;
 import org.alien4cloud.tosca.model.templates.NodeTemplate;
+import org.alien4cloud.tosca.model.templates.PolicyTemplate;
 import org.alien4cloud.tosca.model.templates.RelationshipTemplate;
 import org.alien4cloud.tosca.model.templates.Topology;
 import org.alien4cloud.tosca.model.types.NodeType;
@@ -34,6 +35,7 @@ import static org.alien4cloud.plugin.kubernetes.modifier.KubeTopologyUtils.K8S_T
 
 import org.alien4cloud.plugin.k8s.webhook.modifier.WebhookConfiguration;
 import org.alien4cloud.plugin.k8s.webhook.model.PV;
+import static org.alien4cloud.plugin.k8s.webhook.policies.PolicyModifier.PSEUDORESOURCE_POLICY;
 
 import java.io.BufferedReader;
 import java.io.FileReader;
@@ -248,6 +250,13 @@ public class MutateController {
               JsonNode srcLabels = spec.with("spec").with("template").with("metadata").with("labels");
               StringBuffer labels = processPropsFromJson (srcLabels, "/spec/template/metadata/labels", true, "app");
               srcPatch = addToPatch (srcPatch, labels);
+
+              /* add clusterPolicy label if required */
+              Set<String> ghosts = getPseudoResourceNodes(init_topology);
+              if (!ghosts.isEmpty() && !ghosts.contains(initialNode.getName()))  {
+                 log.debug ("/spec/template/metadata/labels clusterPolicy: privileged");
+                 srcPatch = addToPatch (srcPatch, patchAdd ("/spec/template/metadata/labels", "clusterPolicy", "privileged", true));
+              }
 
               /* add annotations from resource spec */
               exist = (dep.getSpec().getTemplate().getMetadata().getAnnotations() != null);
@@ -733,5 +742,18 @@ public class MutateController {
          }
        }
        return result;
+    }
+
+    /**
+     * get all nodes target of a PseudoResource policy
+     */
+    private Set<String> getPseudoResourceNodes(Topology topology) {
+        Set<String> pseudoResources = new HashSet<String>();
+        Set<PolicyTemplate> policies = TopologyNavigationUtil.getPoliciesOfType(topology, PSEUDORESOURCE_POLICY, true);
+        for (PolicyTemplate policy : policies) {
+           /* get all target nodes on current policy */
+           pseudoResources.addAll(safe(policy.getTargets()));
+        }
+        return pseudoResources;
     }
 }
