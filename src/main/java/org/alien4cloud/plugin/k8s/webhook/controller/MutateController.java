@@ -614,7 +614,7 @@ public class MutateController {
            String value = getEnvValFromJson(src, name);
            if (value != null) {
               log.debug ("env[{}] {} => {}", idx, name, value);
-              if (!value.startsWith ("${SERVICE_IP_LOOKUP")) {
+              if (!value.contains ("${SERVICE_IP_LOOKUP")) {
                  result = addToPatch (result, new StringBuffer("{\"op\": \"replace\", \"path\": \"" + path + "/" + idx + "/value\", \"value\": \"" + escapeValue(value) + "\"}"));
               } else {
                  log.debug ("Skipping env[{}]", idx);
