@@ -79,21 +79,27 @@ public class RunnerAccessControlGenerator extends TopologyModifierSupport {
                       "    a4c_id: " + envId + "\n" +
                       "rules:\n" +
                       "  - apiGroups: [\"\"]\n" +
+                      "    resources: [\"events\"]\n" +
+                      "    verbs: [\"get\", \"list\", \"watch\", \"create\", \"update\", \"patch\", \"delete\", \"deletecollection\"]\n" +
+                      "  - apiGroups: [\"\"]\n" +
                       "    resources: [\"pods\"]\n" +
-                      "    verbs: [\"get\", \"list\", \"watch\", \"create\", \"update\", \"patch\", \"delete\"]\n" +
+                      "    verbs: [\"get\", \"list\", \"watch\", \"create\", \"update\", \"patch\", \"delete\", \"deletecollection\"]\n" +
+                      "  - apiGroups: [\"\"]\n" +
+                      "    resources: [\"pods/log\"]\n" +
+                      "    verbs: [\"get\", \"list\", \"watch\", \"create\", \"update\", \"patch\", \"delete\", \"deletecollection\"]    \n" +
                       "  - apiGroups: ['policy']\n" +
                       "    resources: ['podsecuritypolicies']\n" +
                       "    verbs: ['use']\n" +
                       "    resourceNames: ['privileged']\n" +
                       "  - apiGroups: [\"apps\"]\n" +
                       "    resources: [\"deployments\"]\n" +
-                      "    verbs: [\"get\", \"list\", \"watch\", \"create\", \"update\", \"patch\", \"delete\"]\n" +
+                      "    verbs: [\"get\", \"list\", \"watch\", \"create\", \"update\", \"patch\", \"delete\", \"deletecollection\"]\n" +
                       "  - apiGroups: [\"\"] # \"\" indicates the core API group\n" +
                       "    resources: [\"services\"]\n" +
-                      "    verbs: [\"get\", \"watch\", \"list\", \"create\", \"update\"]\n" +
+                      "    verbs: [\"get\", \"watch\", \"list\", \"create\", \"update\", \"patch\", \"delete\", \"deletecollection\"]\n" +
                       "  - apiGroups: [\"\"] # \"\" indicates the core API group\n" +
                       "    resources: [\"configmaps\"]\n" +
-                      "    verbs: [\"get\", \"watch\", \"list\", \"create\", \"update\"]\n";
+                      "    verbs: [\"get\", \"watch\", \"list\", \"create\", \"update\", \"patch\", \"delete\", \"deletecollection\"]\n";
         createResource (topology, "RunnerRole", envId, "role", role, namespace, kube_config, deployNodes, nsNodeName);
 
         String serviceaccount = "apiVersion: v1\n" +
