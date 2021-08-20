@@ -312,6 +312,27 @@ public class MutateController {
               log.debug ("Found a node for nodeid {}", nodeid);
               /* process only pods created for Spark Jobs */
               if (isJobNode(topology, node)) {
+ 
+                 String qualifiedName = null;
+                 List<Tag> tags = node.getTags();
+                 for (Tag tag: safe(tags)) {
+                    if (tag.getName().equals("qualifiedName")) {
+                       qualifiedName = tag.getValue();
+                   }
+                 }
+                 if (qualifiedName == null) {
+                    log.debug ("No qualified name");
+                 }
+                 else 
+                 {
+                    log.debug ("Searching for PV...");
+                    for (String pvNode : getOptPVService (topology, qualifiedName, node)) {
+                       if (!checkPV (qualifiedName, pvNode)) {
+                          return reject (ar, "Not allowed to use PV");
+                       }
+                    }
+                 }
+
                  /* update pod labels from node labels */
                  boolean exist = (pod.getMetadata().getLabels() != null);
                  StringBuffer labels = processPropsFromProps (node, "labels", "/metadata/labels", exist);
@@ -441,7 +462,10 @@ public class MutateController {
            ComplexPropertyValue valsPV = (ComplexPropertyValue)vals;
            Map<String,Object> valsMap = safe(valsPV.getValue());
            for (String val : valsMap.keySet()) {
-              result = addToPatch (result, patchAdd (path, val, (String)valsMap.get(val), exist));
+              log.debug ("Prop {} key {} value {}", prop, val, valsMap.get(val));
+              Object value = valsMap.get(val);
+              String sValue = (value instanceof Map ? (String)((Map)value).get("value") : (String)value);
+              result = addToPatch (result, patchAdd (path, val, sValue, exist));
               if (!exist) {
                   exist = true;
               }
