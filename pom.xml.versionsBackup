@@ -10,7 +10,7 @@
 
     <artifactId>alien4cloud-k8s-webhook</artifactId>
     <name>A4C K8S webhook</name>
-    <version>3.5.0-SNAPSHOT</version>
+    <version>3.4.0-SNAPSHOT</version>
 
     <dependencies>
         <dependency>
