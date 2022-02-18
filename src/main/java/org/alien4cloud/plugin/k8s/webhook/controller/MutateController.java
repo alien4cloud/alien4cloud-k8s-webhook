@@ -304,82 +304,150 @@ public class MutateController {
            NodeTemplate node = topology.getNodeTemplates().get(nodeid);
            if (node == null) {
               /* check initial topology (case of a container) */
-              if (init_topology.getNodeTemplates().get(nodeid) == null) {
+              node = init_topology.getNodeTemplates().get(nodeid);
+              if (node == null) {
                  log.error ("node not found");
                  return reject(ar, "node not found");
               }
-           } else {
-              log.debug ("Found a node for nodeid {}", nodeid);
-              /* process only pods created for Spark Jobs */
-              if (isJobNode(topology, node)) {
+           }
+
+           log.debug ("Found a node for nodeid {}", nodeid);
+           /* process only pods created for Spark Jobs */
+           if (isJobNode(topology, node)) {
  
-                 String qualifiedName = null;
-                 List<Tag> tags = node.getTags();
-                 for (Tag tag: safe(tags)) {
-                    if (tag.getName().equals("qualifiedName")) {
-                       qualifiedName = tag.getValue();
-                   }
-                 }
-                 if (qualifiedName == null) {
-                    log.debug ("No qualified name");
-                 }
-                 else 
-                 {
-                    log.debug ("Searching for PV...");
-                    for (String pvNode : getOptPVService (topology, qualifiedName, node)) {
-                       if (!checkPV (qualifiedName, pvNode)) {
-                          return reject (ar, "Not allowed to use PV");
-                       }
+              log.info("pod is issued from a spark job");
+              String qualifiedName = null;
+              List<Tag> tags = node.getTags();
+              for (Tag tag: safe(tags)) {
+                 if (tag.getName().equals("qualifiedName")) {
+                    qualifiedName = tag.getValue();
+                }
+              }
+              if (qualifiedName == null) {
+                 log.debug ("No qualified name");
+              }
+              else 
+              {
+                 log.debug ("Searching for PV...");
+                 for (String pvNode : getOptPVService (topology, qualifiedName, node)) {
+                    if (!checkPV (qualifiedName, pvNode)) {
+                       return reject (ar, "Not allowed to use PV");
                     }
                  }
+              }
 
-                 /* update pod labels from node labels */
-                 boolean exist = (pod.getMetadata().getLabels() != null);
-                 StringBuffer labels = processPropsFromProps (node, "labels", "/metadata/labels", exist);
-                 srcPatch.append(labels);
-                 /* update pod annotations from node annotations */
-                 exist = (pod.getMetadata().getAnnotations() != null);
-                 StringBuffer annotations = processPropsFromProps (node, "annotations", "/metadata/annotations", exist);
-                 srcPatch = addToPatch(srcPatch, annotations);
+              /* update pod labels from node labels */
+              boolean exist = (pod.getMetadata().getLabels() != null);
+              StringBuffer labels = processPropsFromProps (node, "labels", "/metadata/labels", exist);
+              srcPatch.append(labels);
+              /* update pod annotations from node annotations */
+              exist = (pod.getMetadata().getAnnotations() != null);
+              StringBuffer annotations = processPropsFromProps (node, "annotations", "/metadata/annotations", exist);
+              srcPatch = addToPatch(srcPatch, annotations);
 
-                 /* update pod env vars from node var_values */
-                 int nbcont = pod.getSpec().getContainers().size();
-                 for (int  icont = 0 ; icont < nbcont ; icont++) {
-                    List<EnvVar> envs = pod.getSpec().getContainers().get(icont).getEnv();
-                    StringBuffer envmods = processEnvFromVars (node, "var_values", "/spec/containers/" + icont + "/env", envs);
-                    srcPatch = addToPatch (srcPatch, envmods);
-                    /* remove resources */
-                    if (bas) {
+              /* update pod env vars from node var_values */
+              int nbcont = pod.getSpec().getContainers().size();
+              for (int  icont = 0 ; icont < nbcont ; icont++) {
+                 List<EnvVar> envs = pod.getSpec().getContainers().get(icont).getEnv();
+                 StringBuffer envmods = processEnvFromVars (node, "var_values", "/spec/containers/" + icont + "/env", envs);
+                 srcPatch = addToPatch (srcPatch, envmods);
+                 /* remove resources */
+                 if (bas) {
+                    srcPatch = addToPatch (srcPatch, new StringBuffer("{ \"op\": \"remove\", \"path\": \"/spec/containers/" + icont + "/resources/limits\" }"));
+                    srcPatch = addToPatch (srcPatch, new StringBuffer("{ \"op\": \"remove\", \"path\": \"/spec/containers/" + icont + "/resources/requests\" }"));
+                 }
+              }
+
+              /* check gangja artefacts */
+              boolean existA = (pod.getMetadata().getAnnotations() != null) || (annotations.length() > 0);
+              boolean existL = (pod.getMetadata().getLabels() != null) || (labels.length() > 0);
+              for (Map.Entry<String, DeploymentArtifact> aa : node.getArtifacts().entrySet()) {
+                 if (aa.getValue().getArtifactType().equals(GANGJA_ARTIFACT_TYPE)) {
+                    DeploymentArtifact clonedArtifact = CloneUtil.clone(aa.getValue());
+                    artifactProcessorService.processDeploymentArtifact(clonedArtifact, init_topology.getId());
+                    log.debug ("File {}", clonedArtifact.getArtifactPath());
+                    srcPatch = addToPatch(srcPatch, processFile(clonedArtifact.getArtifactPath(), "annotation", 
+                                  "/metadata/annotations", existA,
+                                  PropertyUtil.getPropertyValueFromPath(safe(node.getProperties()),"var_values")));
+                    srcPatch = addToPatch(srcPatch, processFile(clonedArtifact.getArtifactPath(), "label", 
+                                  "/metadata/labels", existL,
+                                  PropertyUtil.getPropertyValueFromPath(safe(node.getProperties()),"var_values")));
+                 }
+              }
+
+              /* set priority class */
+              if (prio != null) {
+                 if (pod.getSpec().getPriority() != null) {
+                    srcPatch = addToPatch (srcPatch, new StringBuffer("{\"op\": \"remove\", \"path\": \"/spec/priority\"}"));
+                 }
+                 srcPatch = addToPatch (srcPatch, new StringBuffer("{\"op\": \"add\", \"path\": \"/spec/priorityClassName\", \"value\":\"" + prio + "\"}"));
+              }
+           } else {
+              /* pod which may be a standalone pod */
+              log.info("pod is NOT issued from a spark job");
+
+              /* look for resource node replacing initial node */
+              Set<NodeTemplate> deployNodes = getDeployNodes(topology);
+              NodeTemplate k8snode = null;
+              for (NodeTemplate deployNode : deployNodes) {
+                 String nodeName = TopologyModifierSupport.getNodeTagValueOrNull(deployNode, A4C_KUBERNETES_ADAPTER_MODIFIER_TAG_REPLACEMENT_NODE_FOR);
+                 if ((nodeName != null) && nodeName.equals(node.getName())) {
+                    k8snode = deployNode;
+                    break;
+                 }
+              }
+              if (k8snode == null) {
+                 log.error ("Can not find k8s node for initial node {}",node.getName());
+                 return reject (ar, "K8S node not found");
+              }
+              log.debug ("Found k8s node for nodeid {}", nodeid);
+
+              /* get resource spec */
+              JsonNode spec = null;
+              try {
+                 spec = mapper.readTree(PropertyUtil.getScalarValue(k8snode.getProperties().get("resource_spec")));
+              } catch(Exception e) {
+                 log.error("Can't get node spec: {}", e.getMessage());
+                 return reject (ar, "Can't read node spec property");
+              }
+              /* add labels from resource spec */
+              JsonNode srcLabels = spec.with("spec").with("template").with("metadata").with("labels");
+              StringBuffer labels = processPropsFromJson (srcLabels, "/metadata/labels", true, "app");
+              srcPatch = addToPatch (srcPatch, labels);
+
+              /* add annotations from resource spec */
+              boolean exist = (pod.getMetadata().getAnnotations() != null);
+              JsonNode srcAnnotations = spec.with("spec").with("template").with("metadata").with("annotations");
+              StringBuffer annotations = processPropsFromJson (srcAnnotations, "/metadata/annotations", exist, null);
+              srcPatch= addToPatch (srcPatch, annotations);
+
+              /* update env vars from resource spec */
+              int nbcont = pod.getSpec().getContainers().size();
+              Iterator<JsonNode> jconts = spec.with("spec").with("template").with("spec").withArray("containers").elements();
+              for (int icont = 0 ; icont < nbcont; icont++) {
+                 List<EnvVar> envs = pod.getSpec().getContainers().get(icont).getEnv();
+                 JsonNode srcEnvs = jconts.next().withArray("env");
+           
+                 StringBuffer envmods = processEnvFromJson (srcEnvs, "/spec/containers/" + icont + "/env", envs);
+                 srcPatch = addToPatch (srcPatch, envmods);
+
+                 /* remove resources if any */
+                 if (bas) {
+                    ResourceRequirements resources = pod.getSpec().getContainers().get(icont).getResources();
+                    if ((resources != null) && (resources.getLimits() != null)) {
                        srcPatch = addToPatch (srcPatch, new StringBuffer("{ \"op\": \"remove\", \"path\": \"/spec/containers/" + icont + "/resources/limits\" }"));
+                    }
+                    if ((resources != null) && (resources.getRequests() != null)) {
                        srcPatch = addToPatch (srcPatch, new StringBuffer("{ \"op\": \"remove\", \"path\": \"/spec/containers/" + icont + "/resources/requests\" }"));
                     }
                  }
-
-                 /* check gangja artefacts */
-                 boolean existA = (pod.getMetadata().getAnnotations() != null) || (annotations.length() > 0);
-                 boolean existL = (pod.getMetadata().getLabels() != null) || (labels.length() > 0);
-                 for (Map.Entry<String, DeploymentArtifact> aa : node.getArtifacts().entrySet()) {
-                    if (aa.getValue().getArtifactType().equals(GANGJA_ARTIFACT_TYPE)) {
-                       DeploymentArtifact clonedArtifact = CloneUtil.clone(aa.getValue());
-                       artifactProcessorService.processDeploymentArtifact(clonedArtifact, init_topology.getId());
-                       log.debug ("File {}", clonedArtifact.getArtifactPath());
-                       srcPatch = addToPatch(srcPatch, processFile(clonedArtifact.getArtifactPath(), "annotation", 
-                                     "/metadata/annotations", existA,
-                                     PropertyUtil.getPropertyValueFromPath(safe(node.getProperties()),"var_values")));
-                       srcPatch = addToPatch(srcPatch, processFile(clonedArtifact.getArtifactPath(), "label", 
-                                     "/metadata/labels", existL,
-                                     PropertyUtil.getPropertyValueFromPath(safe(node.getProperties()),"var_values")));
-                    }
-                 }
-
-                 /* set priority class */
-                 if (prio != null) {
-                    if (pod.getSpec().getPriority() != null) {
-                       srcPatch = addToPatch (srcPatch, new StringBuffer("{\"op\": \"remove\", \"path\": \"/spec/priority\"}"));
-                    }
-                    srcPatch = addToPatch (srcPatch, new StringBuffer("{\"op\": \"add\", \"path\": \"/spec/priorityClassName\", \"value\":\"" + prio + "\"}"));
-                 }
               }
+
+              /* set priority class */
+              if (prio != null) {
+                 srcPatch = addToPatch (srcPatch, new StringBuffer("{\"op\": \"add\", \"path\": \"/spec/priorityClassName\", \"value\":\"" + prio + "\"}"));
+              }
+
            }
         }
 
