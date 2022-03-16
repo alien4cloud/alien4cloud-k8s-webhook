@@ -415,6 +415,12 @@ public class MutateController {
               StringBuffer labels = processPropsFromJson (srcLabels, "/metadata/labels", true, "app");
               srcPatch = addToPatch (srcPatch, labels);
 
+              Set<String> ghosts = getPseudoResourceNodes(init_topology);
+              if (!ghosts.isEmpty())  {
+                 log.debug ("/metadata/labels clusterPolicy: privileged");
+                 srcPatch = addToPatch (srcPatch, patchAdd ("/metadata/labels", "clusterPolicy", "privileged", true));
+              }
+
               /* add annotations from resource spec */
               boolean exist = (pod.getMetadata().getAnnotations() != null);
               JsonNode srcAnnotations = spec.with("spec").with("template").with("metadata").with("annotations");
